@@ -8,6 +8,7 @@ from telegram.ext import (
     ContextTypes, ConversationHandler, filters
 )
 from pgd_bot import PGD_Person_Mod, PGD_Pair
+from personality_processor import PersonalityCupProcessor
 
 # === Загрузка токена ===
 with open("token.txt", "r") as f:
@@ -50,9 +51,9 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "👤 Личная диагностика":
         await update.message.reply_text("Введите имя:", reply_markup=cancel_keyboard())
         return NAME
-    elif text == "❤️ Диагностика пары":
-        await update.message.reply_text("Введите имя первого партнёра:", reply_markup=cancel_keyboard())
-        return P_NAME1
+    #elif text == "❤️ Диагностика пары":
+        #await update.message.reply_text("Введите имя первого партнёра:", reply_markup=cancel_keyboard())
+        #return P_NAME1
     else:
         await update.message.reply_text("Пожалуйста, выберите действие с клавиатуры.")
         return MENU
@@ -77,78 +78,89 @@ async def personal_sex(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         person = PGD_Person_Mod(context.user_data["name"], context.user_data["date"], context.user_data["sex"])
-        points = person.calculate_points()
-        tasks = person.tasks()
-        periods = person.periods_person()
+        points = person.calculate_points()  # словарь с тремя зонами
 
-        msg = f"📌 *Результаты для {context.user_data['name']}*\n\n"
-        msg += "🔹 *Точки личности:*\n"
-        for group, values in points.items():
-            msg += f"_{group}_\n"
-            for key, val in values.items():
-                msg += f"• *{key}*: `{val}`\n"
-        msg += "\n🌟 *Сверхзадачи:*\n"
-        for k, v in tasks.items():
-            msg += f"• *{k}*: `{v}`\n"
-        msg += "\n🧭 *Бизнес-периоды:*\n"
-        for k, v in periods["Бизнес периоды"].items():
-            msg += f"• *{k}*: `{v}`\n"
+        # Подготовка данных для PersonalityCupProcessor
+        cup_dict = {
+            'Основная чашка': points.get('Основная чашка', {}),
+            'Родовые данности': points.get('Родовые данности', {}),
+            'Перекрёсток': points.get('Перекрёсток', {})
+        }
 
-        context.user_data["last_result"] = msg
-        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=result_keyboard())
+        main_points = ...  # импорт или определение из personality_processor
+        description_dict = ...  # словарь описаний для родовых и перекрестных зон
+
+        processor = PersonalityCupProcessor(cup_dict, main_points)
+
+        rodovoy_desc, perekrestok_desc = processor.map_descriptions(description_dict)
+
+        results = processor.process(
+            chashka=processor.result(cup_dict['Основная чашка']),
+            rodovoy_desc=rodovoy_desc,
+            perekrestok_desc=perekrestok_desc
+        )
+
+        final_text = ""
+        for quality, description in results.items():
+            final_text += f"• *{quality}*:\n{description}\n\n"
+
+        context.user_data["last_result"] = final_text
+        await update.message.reply_text(final_text, parse_mode="Markdown", reply_markup=result_keyboard())
         return MENU
+
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}")
         return MENU
+
 
 # === Парная диагностика
-async def pair_name1(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["name1"] = update.message.text
-    await update.message.reply_text("Дата рождения первого партнёра (ДД.ММ.ГГГГ):")
-    return P_DATE1
+#async def pair_name1(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #context.user_data["name1"] = update.message.text
+    #await update.message.reply_text("Дата рождения первого партнёра (ДД.ММ.ГГГГ):")
+    #return P_DATE1
 
-async def pair_date1(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["date1"] = update.message.text
-    await update.message.reply_text("Введите имя второго партнёра:")
-    return P_NAME2
+#async def pair_date1(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #context.user_data["date1"] = update.message.text
+    #await update.message.reply_text("Введите имя второго партнёра:")
+    #return P_NAME2
 
-async def pair_name2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["name2"] = update.message.text
-    await update.message.reply_text("Дата рождения второго партнёра (ДД.ММ.ГГГГ):")
-    return P_DATE2
+#async def pair_name2(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #context.user_data["name2"] = update.message.text
+    #await update.message.reply_text("Дата рождения второго партнёра (ДД.ММ.ГГГГ):")
+    #return P_DATE2
 
-async def pair_date2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["date2"] = update.message.text
-    try:
-        pair = PGD_Pair(context.user_data["name1"], context.user_data["date1"],
-                        context.user_data["name2"], context.user_data["date2"])
-        points = pair.main_pair()
-        tasks = pair.tasks()
-        periods = pair.periods_pair()
-        partner_tasks = pair.tasks_business()
+#async def pair_date2(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #context.user_data["date2"] = update.message.text
+    #try:
+        #pair = PGD_Pair(context.user_data["name1"], context.user_data["date1"],
+                        #context.user_data["name2"], context.user_data["date2"])
+        #points = pair.main_pair()
+        #tasks = pair.tasks()
+        #periods = pair.periods_pair()
+        #partner_tasks = pair.tasks_business()
 
-        msg = f"📌 *Пара: {context.user_data['name1']} и {context.user_data['name2']}*\n\n"
-        msg += "🔹 *Точки пары:*\n"
-        for group, values in points.items():
-            msg += f"_{group}_\n"
-            for key, val in values.items():
-                msg += f"• *{key}*: `{val}`\n"
-        msg += "\n🌟 *Сверхзадачи:*\n"
-        for key, val in tasks["Сверхзадачи"].items():
-            msg += f"• *{key}*: `{val}`\n"
-        msg += "\n🧭 *Бизнес-периоды:*\n"
-        for key, val in periods["Бизнес периоды"].items():
-            msg += f"• *{key}*: `{val}`\n"
-        msg += "\n🔧 *Задачи партнёров:*\n"
-        for k, v in partner_tasks.items():
-            msg += f"• *{k}*: `{v}`\n"
+        #msg = f"📌 *Пара: {context.user_data['name1']} и {context.user_data['name2']}*\n\n"
+        #msg += "🔹 *Точки пары:*\n"
+        #for group, values in points.items():
+           # msg += f"_{group}_\n"
+           # for key, val in values.items():
+                #msg += f"• *{key}*: `{val}`\n"
+        #msg += "\n🌟 *Сверхзадачи:*\n"
+        #for key, val in tasks["Сверхзадачи"].items():
+            #msg += f"• *{key}*: `{val}`\n"
+        #msg += "\n🧭 *Бизнес-периоды:*\n"
+        #for key, val in periods["Бизнес периоды"].items():
+            #msg += f"• *{key}*: `{val}`\n"
+        #msg += "\n🔧 *Задачи партнёров:*\n"
+        #for k, v in partner_tasks.items():
+            #msg += f"• *{k}*: `{v}`\n"
 
-        context.user_data["last_result"] = msg
-        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=result_keyboard())
-        return MENU
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка: {e}")
-        return MENU
+        #context.user_data["last_result"] = msg
+        #await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=result_keyboard())
+        #return MENU
+    #except Exception as e:
+        #await update.message.reply_text(f"Ошибка: {e}")
+        #return MENU
 
 # === Обработка кнопок
 async def handle_result_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -181,10 +193,10 @@ async def main():
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, personal_name)],
             DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, personal_date)],
             SEX: [MessageHandler(filters.TEXT & ~filters.COMMAND, personal_sex)],
-            P_NAME1: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_name1)],
-            P_DATE1: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_date1)],
-            P_NAME2: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_name2)],
-            P_DATE2: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_date2)],
+            #P_NAME1: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_name1)],
+            #P_DATE1: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_date1)],
+            #P_NAME2: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_name2)],
+            #P_DATE2: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_date2)],
         },
         fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)],
         allow_reentry=True
