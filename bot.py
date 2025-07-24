@@ -1,238 +1,261 @@
+# Файл: telegram_bot.py
+
+import logging
 import os
-import sys
-import asyncio
-from fpdf import FPDF
-from telegram import Update, ReplyKeyboardMarkup
+import re
+from datetime import datetime
+
+from dotenv import load_dotenv
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, ConversationHandler, filters
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
 )
-from pgd_bot import PGD_Person_Mod, PGD_Pair
-from personality_processor import PersonalityCupProcessor
 
-# === Загрузка токена ===
-with open("token.txt", "r") as f:
-    TOKEN = f.read().strip()
+# Импортируем ваши рабочие классы
+from pgd_bot import PGD_Person_Mod
+from cashka_preprocessor import PersonalityProcessor
 
-# === Состояния
-MENU, NAME, DATE, SEX = range(4)
-P_NAME1, P_DATE1, P_NAME2, P_DATE2 = range(10, 14)
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# === Клавиатуры
-def main_menu_keyboard():
-    return ReplyKeyboardMarkup([["👤 Личная диагностика"], ["❤️ Диагностика пары"]], resize_keyboard=True)
+load_dotenv()
+BOT_TOKEN = os.getenv("TOKEN_BOT")
 
-def cancel_keyboard():
-    return ReplyKeyboardMarkup([["❌ Отмена"]], resize_keyboard=True)
+if not BOT_TOKEN:
+    print("--- ОШИБКА ---")
+    print("Не найден токен для Telegram бота! Убедитесь, что у вас есть файл .env")
+    print("И в нем есть строка вида: TOKEN_BOT=12345:ABC-DEF...")
+    exit()
 
-def result_keyboard():
-    return ReplyKeyboardMarkup([["📄 Скачать описание"], ["🔙 В главное меню"]], resize_keyboard=True)
+# --- Определяем состояния для нашего диалога ---
+# GET_... - для сбора данных, SHOW_... - для показа результатов
+GET_NAME, GET_DOB, GET_GENDER, SHOW_DESCRIPTION = range(4)
 
-# === PDF генерация
-def generate_pdf(text: str, filename: str) -> str:
-    os.makedirs("output", exist_ok=True)
-    path = os.path.join("output", filename)
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    for line in text.split("\n"):
-        pdf.multi_cell(0, 10, line)
-    pdf.output(path)
-    return path
 
-# === Команда /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Выберите тип диагностики:", reply_markup=main_menu_keyboard())
-    return MENU
+def escape_markdown(text: str) -> str:
+    """Экранирует специальные символы для Telegram MarkdownV2."""
+    if not isinstance(text, str):
+        text = str(text)
+    escape_chars = r'_*[]()~`>#+-.=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
-# === Главное меню
-async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "👤 Личная диагностика":
-        await update.message.reply_text("Введите имя:", reply_markup=cancel_keyboard())
-        return NAME
-    #elif text == "❤️ Диагностика пары":
-        #await update.message.reply_text("Введите имя первого партнёра:", reply_markup=cancel_keyboard())
-        #return P_NAME1
-    else:
-        await update.message.reply_text("Пожалуйста, выберите действие с клавиатуры.")
-        return MENU
 
-# === Личная диагностика
-async def personal_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["name"] = update.message.text
-    await update.message.reply_text("Введите дату рождения (ДД.ММ.ГГГГ):", reply_markup=cancel_keyboard())
-    return DATE
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начинает диалог и запрашивает имя."""
+    # Очищаем данные от предыдущих сессий на всякий случай
+    context.user_data.clear()
+    await update.message.reply_text(
+        r"👋 Здравствуйте\! Я бот для психологической диагностики\."
+        r"\n\nЧтобы начать, пожалуйста, введите Ваше имя\.",
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+    return GET_NAME
 
-async def personal_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["date"] = update.message.text
-    await update.message.reply_text("Укажите пол:", reply_markup=ReplyKeyboardMarkup([["М", "Ж"]], resize_keyboard=True))
-    return SEX
 
-async def personal_sex(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sex = update.message.text.strip().upper()
-    if sex not in ["М", "Ж"]:
-        await update.message.reply_text("Пожалуйста, выберите пол из предложенных вариантов: М или Ж.")
-        return SEX
-    context.user_data["sex"] = sex
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Сохраняет имя и запрашивает дату рождения."""
+    context.user_data['name'] = update.message.text
+    logger.info(f"Имя пользователя: {context.user_data['name']}")
+    await update.message.reply_text(
+        rf"Отлично, {escape_markdown(context.user_data['name'])}\! Теперь введите Вашу дату рождения в формате *ДД\.ММ\.ГГГГ*\.",
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+    return GET_DOB
+
+
+async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Сохраняет дату рождения и запрашивает пол."""
+    try:
+        context.user_data['dob'] = datetime.strptime(update.message.text, '%d.%m.%Y')
+        logger.info(f"Дата рождения: {update.message.text}")
+        keyboard = [[InlineKeyboardButton("Женский", callback_data="Ж"), InlineKeyboardButton("Мужской", callback_data="М")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(r"Спасибо\! Пожалуйста, выберите Ваш пол:", reply_markup=reply_markup)
+        return GET_GENDER
+    except ValueError:
+        await update.message.reply_text(
+            r"❌ *Ошибка формата даты*\."
+            r"\n\nПожалуйста, введите дату строго в формате *ДД\.ММ\.ГГГГ* \(например, 09\.10\.1988\)\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return GET_DOB
+
+
+async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Сохраняет пол, запускает расчет и отправляет кнопки с результатами."""
+    query = update.callback_query
+    await query.answer()
+
+    gender_char = query.data
+    gender_full = "Женский" if gender_char == "Ж" else "Мужской"
+    logger.info(f"Пол: {gender_full}")
+
+    await query.edit_message_text(text=rf"Вы выбрали пол: *{escape_markdown(gender_full)}*\.\n\n⏳ Начинаю расчет\.\.\.", parse_mode=ParseMode.MARKDOWN_V2)
+
+    user_data = context.user_data
+    name = user_data['name']
+    date_str = user_data['dob'].strftime('%d.%m.%Y')
 
     try:
-        person = PGD_Person_Mod(context.user_data["name"], context.user_data["date"], context.user_data["sex"])
-        points = person.calculate_points()  # словарь с тремя зонами
+        # 1. Расчеты
+        person_mod = PGD_Person_Mod(name, date_str, gender_char)
+        main_cup_data = person_mod.calculate_points()
+        tasks_data = person_mod.tasks()
+        periods_data = person_mod.periods_person()
+        
+        if not isinstance(main_cup_data, dict):
+            raise ValueError(f"Ошибка при расчете основной матрицы: {main_cup_data}")
 
-        # Подготовка данных для PersonalityCupProcessor
-        cup_dict = {
-            'Основная чашка': points.get('Основная чашка', {}),
-            'Родовые данности': points.get('Родовые данности', {}),
-            'Перекрёсток': points.get('Перекрёсток', {})
-        }
+        # 2. Обработка текста
+        processor = PersonalityProcessor(main_cup_data)
+        full_descriptions = processor.get_full_description()
+        
+        # --- СОХРАНЯЕМ РЕЗУЛЬТАТЫ В ПАМЯТИ ДИАЛОГА ---
+        context.user_data['full_descriptions'] = full_descriptions
 
-        main_points = ...  # импорт или определение из personality_processor
-        description_dict = ...  # словарь описаний для родовых и перекрестных зон
-
-        processor = PersonalityCupProcessor(cup_dict, main_points)
-
-        rodovoy_desc, perekrestok_desc = processor.map_descriptions(description_dict)
-
-        results = processor.process(
-            chashka=processor.result(cup_dict['Основная чашка']),
-            rodovoy_desc=rodovoy_desc,
-            perekrestok_desc=perekrestok_desc
-        )
-
-        final_text = ""
-        for quality, description in results.items():
-            final_text += f"• *{quality}*:\n{description}\n\n"
-
-        context.user_data["last_result"] = final_text
-        await update.message.reply_text(final_text, parse_mode="Markdown", reply_markup=result_keyboard())
-        return MENU
+        # 3. Отправка сводных данных
+        header = f"*Результаты анализа для {escape_markdown(name)} \\({escape_markdown(date_str)}\\)*\n\n"
+        summary_text = ""
+        if tasks_data:
+            summary_text += "*Задачи по Матрице:*\n"
+            for key, val in tasks_data.items():
+                summary_text += f"_{escape_markdown(key)}_ `{escape_markdown(val) if val is not None else '-'}`\n"
+        if periods_data and "Бизнес периоды" in periods_data:
+            summary_text += "\n*Бизнес Периоды:*\n"
+            for key, val in periods_data["Бизнес периоды"].items():
+                summary_text += f"_{escape_markdown(key)}_: `{escape_markdown(val) if val is not None else '-'}`\n"
+        
+        await context.bot.send_message(chat_id=query.message.chat_id, text=header + summary_text, parse_mode=ParseMode.MARKDOWN_V2)
+        
+        # 4. Формирование и отправка кнопок
+        if full_descriptions:
+            keyboard = [[InlineKeyboardButton(text=key, callback_data=key)] for key in full_descriptions.keys()]
+            # Добавляем кнопку для завершения
+            keyboard.append([InlineKeyboardButton("✅ Завершить", callback_data="END_CONVERSATION")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="Выберите точку для получения подробного описания:",
+                reply_markup=reply_markup
+            )
+            # ПЕРЕХОДИМ В СОСТОЯНИЕ ОЖИДАНИЯ НАЖАТИЯ КНОПКИ
+            return SHOW_DESCRIPTION
+        else:
+            await context.bot.send_message(chat_id=query.message.chat_id, text="❌ Подробные описания не были сформированы.")
+            return await end_conversation(update, context) # Завершаем, если нет описаний
 
     except Exception as e:
-        await update.message.reply_text(f"Ошибка: {e}")
-        return MENU
+        logger.error(f"Ошибка при расчете или отправке: {e}", exc_info=True)
+        await context.bot.send_message(chat_id=query.message.chat_id, text=r"❌ Произошла внутренняя ошибка\. Попробуйте позже\.")
+        return ConversationHandler.END
 
 
-# === Парная диагностика
-#async def pair_name1(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    #context.user_data["name1"] = update.message.text
-    #await update.message.reply_text("Дата рождения первого партнёра (ДД.ММ.ГГГГ):")
-    #return P_DATE1
+async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает описание для выбранной точки."""
+    query = update.callback_query
+    await query.answer()
 
-#async def pair_date1(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    #context.user_data["date1"] = update.message.text
-    #await update.message.reply_text("Введите имя второго партнёра:")
-    #return P_NAME2
+    # Получаем ключ из callback_data
+    selected_key = query.data
+    
+    # Достаем сохраненные описания
+    full_descriptions = context.user_data.get('full_descriptions', {})
 
-#async def pair_name2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    #context.user_data["name2"] = update.message.text
-    #await update.message.reply_text("Дата рождения второго партнёра (ДД.ММ.ГГГГ):")
-    #return P_DATE2
+    if not full_descriptions or selected_key not in full_descriptions:
+        await query.edit_message_text(text="❌ Описание не найдено. Возможно, сессия устарела.")
+        return SHOW_DESCRIPTION
 
-#async def pair_date2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    #context.user_data["date2"] = update.message.text
-    #try:
-        #pair = PGD_Pair(context.user_data["name1"], context.user_data["date1"],
-                        #context.user_data["name2"], context.user_data["date2"])
-        #points = pair.main_pair()
-        #tasks = pair.tasks()
-        #periods = pair.periods_pair()
-        #partner_tasks = pair.tasks_business()
+    description_text = full_descriptions[selected_key]
+    formatted_value = description_text.replace('**', '*').replace('\n\n', '\n')
+    
+    # Формируем новое сообщение с описанием и кнопкой "назад"
+    message_text = f"*{escape_markdown(selected_key)}*\n\n{escape_markdown(formatted_value)}"
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Назад к списку", callback_data="BACK_TO_LIST")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Редактируем исходное сообщение, показывая текст
+    await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+    
+    return SHOW_DESCRIPTION
 
-        #msg = f"📌 *Пара: {context.user_data['name1']} и {context.user_data['name2']}*\n\n"
-        #msg += "🔹 *Точки пары:*\n"
-        #for group, values in points.items():
-           # msg += f"_{group}_\n"
-           # for key, val in values.items():
-                #msg += f"• *{key}*: `{val}`\n"
-        #msg += "\n🌟 *Сверхзадачи:*\n"
-        #for key, val in tasks["Сверхзадачи"].items():
-            #msg += f"• *{key}*: `{val}`\n"
-        #msg += "\n🧭 *Бизнес-периоды:*\n"
-        #for key, val in periods["Бизнес периоды"].items():
-            #msg += f"• *{key}*: `{val}`\n"
-        #msg += "\n🔧 *Задачи партнёров:*\n"
-        #for k, v in partner_tasks.items():
-            #msg += f"• *{k}*: `{v}`\n"
 
-        #context.user_data["last_result"] = msg
-        #await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=result_keyboard())
-        #return MENU
-    #except Exception as e:
-        #await update.message.reply_text(f"Ошибка: {e}")
-        #return MENU
+async def back_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Возвращает пользователя к списку кнопок."""
+    query = update.callback_query
+    await query.answer()
+    
+    full_descriptions = context.user_data.get('full_descriptions', {})
+    
+    if full_descriptions:
+        keyboard = [[InlineKeyboardButton(text=key, callback_data=key)] for key in full_descriptions.keys()]
+        keyboard.append([InlineKeyboardButton("✅ Завершить", callback_data="END_CONVERSATION")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Редактируем сообщение, снова показывая список
+        await query.edit_message_text(
+            text="Выберите точку для получения подробного описания:",
+            reply_markup=reply_markup
+        )
+    else:
+        await query.edit_message_text("Список описаний пуст.")
 
-# === Обработка кнопок
-async def handle_result_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "📄 Скачать описание":
-        try:
-            content = context.user_data.get("last_result", "Нет данных.")
-            filename = f"diagnostic_{update.message.from_user.id}.pdf"
-            path = generate_pdf(content, filename)
-            await update.message.reply_document(document=open(path, "rb"), filename=filename)
-        except Exception as e:
-            await update.message.reply_text(f"Ошибка при генерации PDF: {e}")
-        return MENU
-    elif text == "🔙 В главное меню":
-        return await start(update, context)
+    return SHOW_DESCRIPTION
 
-# === Отмена
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Операция отменена.", reply_markup=main_menu_keyboard())
-    return MENU
 
-# === Основной асинхронный запуск
-async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+async def end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Корректно завершает диалог."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.edit_message_text(text="✅ Анализ завершен\. Чтобы начать новый, отправьте команду /start\.", parse_mode=ParseMode.MARKDOWN_V2)
+    else:
+        await update.message.reply_text("✅ Анализ завершен\. Чтобы начать новый, отправьте команду /start\.", parse_mode=ParseMode.MARKDOWN_V2)
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Отменяет текущий диалог."""
+    await update.message.reply_text(r"Действие отменено\. Чтобы начать заново, введите /start\.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+def main() -> None:
+    """Запускает бота."""
+    application = Application.builder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu)],
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, personal_name)],
-            DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, personal_date)],
-            SEX: [MessageHandler(filters.TEXT & ~filters.COMMAND, personal_sex)],
-            #P_NAME1: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_name1)],
-            #P_DATE1: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_date1)],
-            #P_NAME2: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_name2)],
-            #P_DATE2: [MessageHandler(filters.TEXT & ~filters.COMMAND, pair_date2)],
+            GET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            GET_DOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
+            GET_GENDER: [CallbackQueryHandler(get_gender, pattern="^Ж$|^М$")], # Ловит только 'М' или 'Ж'
+            SHOW_DESCRIPTION: [
+                CallbackQueryHandler(back_to_list, pattern="^BACK_TO_LIST$"),
+                CallbackQueryHandler(end_conversation, pattern="^END_CONVERSATION$"),
+                # Этот обработчик ловит все остальные нажатия
+                CallbackQueryHandler(show_description) 
+            ],
         },
-        fallbacks=[MessageHandler(filters.Regex("^❌ Отмена$"), cancel)],
-        allow_reentry=True
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    app.add_handler(conv_handler)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_result_buttons))
-
-    print("✅ Бот запущен.")
-    await app.run_polling()
-
-# === Запуск
-import sys
-import asyncio
-
-if __name__ == "__main__":
-    # Для Windows Python 3.8+
-    if sys.platform.startswith("win") and sys.version_info >= (3, 8):
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-    try:
-        import nest_asyncio
-        nest_asyncio.apply()
-    except ImportError:
-        print("Установи nest_asyncio: pip install nest_asyncio")
-        sys.exit(1)
-
-    import contextlib
-
-    async def runner():
-        try:
-            await main()
-        except KeyboardInterrupt:
-            print("⛔ Остановка по Ctrl+C")
-
-    with contextlib.suppress(RuntimeError):
-        asyncio.get_event_loop().run_until_complete(runner())
+    application.add_handler(conv_handler)
+    
+    print("Бот запущен...")
+    application.run_polling()
 
 
+if __name__ == "__main__": 
+    main()
