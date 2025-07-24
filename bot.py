@@ -262,19 +262,16 @@ async def send_results_as_file(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Корректно завершает диалог."""
     query = update.callback_query
     if query:
         await query.answer()
-        await query.edit_message_text(text="✅ Анализ завершен\. Чтобы начать новый, отправьте команду /start\.", parse_mode=ParseMode.MARKDOWN_V2)
+        # Добавляем 'r'
+        await query.edit_message_text(text=r"✅ Анализ завершен\. Чтобы начать новый, отправьте команду /start\.", parse_mode=ParseMode.MARKDOWN_V2)
     else:
-        # Этот блок нужен, если завершение вызывается не через кнопку
-        await update.message.reply_text("✅ Анализ завершен\. Чтобы начать новый, отправьте команду /start\.", parse_mode=ParseMode.MARKDOWN_V2)
+        # Добавляем 'r'
+        await update.message.reply_text(r"✅ Анализ завершен\. Чтобы начать новый, отправьте команду /start\.", parse_mode=ParseMode.MARKDOWN_V2)
 
-    context.user_data.clear()
-    return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text(r"Действие отменено\. Чтобы начать заново, введите /start\.")
     context.user_data.clear()
     return ConversationHandler.END
 
