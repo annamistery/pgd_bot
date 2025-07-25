@@ -155,7 +155,8 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         
         # Формирование и отправка кнопок
         if full_descriptions:
-            keyboard = [[InlineKeyboardButton(text=key, callback_data=key)] for key in full_descriptions.keys()]
+            # Преобразуем ключ в строку с помощью str()
+            keyboard = [[InlineKeyboardButton(text=str(key), callback_data=str(key))] for key in full_descriptions.keys()]
             # --- ИЗМЕНЕНИЕ: Добавляем кнопку скачивания ---
             keyboard.append([InlineKeyboardButton("📥 Скачать результат в .txt", callback_data="DOWNLOAD_FILE")])
             keyboard.append([InlineKeyboardButton("✅ Завершить", callback_data="END_CONVERSATION")])
