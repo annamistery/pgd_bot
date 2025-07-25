@@ -44,7 +44,6 @@ def escape_markdown(text: str) -> str:
     escape_chars = r'_*[]()~`>#+-.=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
-# --- НОВАЯ ФУНКЦИЯ: Форматирует результаты для текстового файла ---
 def format_results_for_download(name: str, dob: datetime, results: dict, tasks: dict, periods: dict) -> str:
     """Форматирует все результаты в красивую строку для .txt файла."""
     header = (
@@ -64,7 +63,6 @@ def format_results_for_download(name: str, dob: datetime, results: dict, tasks: 
 
     main_content = "\n--- Подробное описание ---\n"
     for key, value in results.items():
-        # Убираем Markdown для чистого текста
         clean_value = value.replace('**', '').replace('*', '').replace('\n\n', '\n')
         main_content += f"\n--- {key} ---\n{clean_value}\n"
     
@@ -121,7 +119,6 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     date_str = user_data['dob'].strftime('%d.%m.%Y')
 
     try:
-        # Расчеты
         person_mod = PGD_Person_Mod(name, date_str, gender_char)
         main_cup_data = person_mod.calculate_points()
         tasks_data = person_mod.tasks()
@@ -130,16 +127,17 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if not isinstance(main_cup_data, dict):
             raise ValueError(f"Ошибка при расчете основной матрицы: {main_cup_data}")
 
-        # Обработка текста
         processor = PersonalityProcessor(main_cup_data)
         full_descriptions = processor.get_full_description()
         
-        # --- Сохраняем все результаты в памяти диалога ---
         context.user_data['full_descriptions'] = full_descriptions
         context.user_data['tasks_data'] = tasks_data
         context.user_data['periods_data'] = periods_data
+        
+        description_keys = list(full_descriptions.keys())
+        context.user_data['description_keys'] = description_keys
 
-        # Отправка сводных данных
+        # --- ИСПРАВЛЕНО: Этот блок теперь НАХОДИТСЯ ВНУТРИ TRY ---
         header = f"*Результаты анализа для {escape_markdown(name)} \\({escape_markdown(date_str)}\\)*\n\n"
         summary_text = ""
         if tasks_data:
@@ -151,16 +149,18 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             for key, val in periods_data["Бизнес периоды"].items():
                 summary_text += f"_{escape_markdown(key)}_: `{escape_markdown(val) if val is not None else '-'}`\n"
         
-        await context.bot.send_message(chat_id=query.message.chat_id, text=header + summary_text, parse_mode=ParseMode.MARKDOWN_V2)
-        
-        # Формирование и отправка кнопок
+        if summary_text:
+            await context.bot.send_message(chat_id=query.message.chat_id, text=header + summary_text, parse_mode=ParseMode.MARKDOWN_V2)
+        # --- КОНЕЦ ИСПРАВЛЕННОГО БЛОКА ---
+
         if full_descriptions:
-            # Преобразуем ключ в строку с помощью str()
-            keyboard = [[InlineKeyboardButton(text=str(key), callback_data=str(key))] for key in full_descriptions.keys()]
-            # --- ИЗМЕНЕНИЕ: Добавляем кнопку скачивания ---
+            keyboard = [
+                [InlineKeyboardButton(text=key, callback_data=f"desc_{i}")]
+                for i, key in enumerate(description_keys)
+            ]
             keyboard.append([InlineKeyboardButton("📥 Скачать результат в .txt", callback_data="DOWNLOAD_FILE")])
             keyboard.append([InlineKeyboardButton("✅ Завершить", callback_data="END_CONVERSATION")])
-            
+    
             reply_markup = InlineKeyboardMarkup(keyboard)
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
@@ -181,16 +181,23 @@ async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     await query.answer()
 
-    selected_key = query.data
+    try:
+        key_index = int(query.data.split('_')[1])
+    except (IndexError, ValueError):
+        await query.edit_message_text(text="❌ Ошибка данных кнопки.")
+        return SHOW_DESCRIPTION
+
+    description_keys = context.user_data.get('description_keys', [])
     full_descriptions = context.user_data.get('full_descriptions', {})
 
-    if not full_descriptions or selected_key not in full_descriptions:
+    if not description_keys or key_index >= len(description_keys):
         await query.edit_message_text(text="❌ Описание не найдено. Возможно, сессия устарела.")
         return SHOW_DESCRIPTION
 
+    selected_key = description_keys[key_index]
     description_text = full_descriptions[selected_key]
-    formatted_value = description_text.replace('**', '*').replace('\n\n', '\n')
     
+    formatted_value = description_text.replace('**', '*').replace('\n\n', '\n')
     message_text = f"*{escape_markdown(selected_key)}*\n\n{escape_markdown(formatted_value)}"
     
     keyboard = [[InlineKeyboardButton("⬅️ Назад к списку", callback_data="BACK_TO_LIST")]]
@@ -207,7 +214,11 @@ async def back_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     full_descriptions = context.user_data.get('full_descriptions', {})
     
     if full_descriptions:
-        keyboard = [[InlineKeyboardButton(text=key, callback_data=key)] for key in full_descriptions.keys()]
+        description_keys = context.user_data.get('description_keys', [])
+        keyboard = [
+            [InlineKeyboardButton(text=key, callback_data=f"desc_{i}")]
+            for i, key in enumerate(description_keys)
+        ]
         keyboard.append([InlineKeyboardButton("📥 Скачать результат в .txt", callback_data="DOWNLOAD_FILE")])
         keyboard.append([InlineKeyboardButton("✅ Завершить", callback_data="END_CONVERSATION")])
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -221,20 +232,16 @@ async def back_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     return SHOW_DESCRIPTION
 
-# --- НОВАЯ ФУНКЦИЯ: Обрабатывает нажатие на кнопку скачивания ---
 async def send_results_as_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Генерирует .txt файл и отправляет его пользователю."""
     query = update.callback_query
-    await query.answer(text="Готовлю файл...") # Короткое уведомление для пользователя
+    await query.answer(text="Готовлю файл...")
 
     user_data = context.user_data
     
-    # Проверяем, есть ли все необходимые данные
     if not all(k in user_data for k in ['name', 'dob', 'full_descriptions', 'tasks_data', 'periods_data']):
         await context.bot.send_message(chat_id=query.message.chat_id, text="❌ Недостаточно данных для формирования файла. Попробуйте начать заново /start")
         return SHOW_DESCRIPTION
 
-    # Формируем содержимое файла
     file_content = format_results_for_download(
         name=user_data['name'],
         dob=user_data['dob'],
@@ -243,12 +250,9 @@ async def send_results_as_file(update: Update, context: ContextTypes.DEFAULT_TYP
         periods=user_data['periods_data']
     )
     
-    # Создаем имя файла
     file_name = f"analysis_{user_data['name']}_{user_data['dob'].strftime('%Y%m%d')}.txt"
     
     try:
-        # Отправляем файл как документ
-        # Мы передаем контент в виде байтов, библиотека сама формирует файл
         await context.bot.send_document(
             chat_id=query.message.chat_id,
             document=bytes(file_content, 'utf-8'),
@@ -258,12 +262,9 @@ async def send_results_as_file(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Ошибка при отправке файла: {e}", exc_info=True)
         await context.bot.send_message(chat_id=query.message.chat_id, text="❌ Не удалось отправить файл.")
     
-    # Остаемся в том же состоянии, чтобы пользователь мог продолжить просмотр
     return SHOW_DESCRIPTION
 
-
 async def end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Корректно завершает диалог."""
     query = update.callback_query
     if query:
         await query.answer()
@@ -274,9 +275,7 @@ async def end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---> ВОТ СЮДА ВСТАВЬТЕ НОВУЮ ФУНКЦИЮ <---
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Отменяет и завершает диалог."""
     logger.info(f"Пользователь {update.effective_user.first_name} отменил диалог.")
     await update.message.reply_text(
         r"Действие отменено\. Чтобы начать новый анализ, введите /start\.", 
@@ -297,10 +296,8 @@ def main() -> None:
             SHOW_DESCRIPTION: [
                 CallbackQueryHandler(back_to_list, pattern="^BACK_TO_LIST$"),
                 CallbackQueryHandler(end_conversation, pattern="^END_CONVERSATION$"),
-                # --- ИЗМЕНЕНИЕ: Добавляем новый обработчик для скачивания ---
                 CallbackQueryHandler(send_results_as_file, pattern="^DOWNLOAD_FILE$"),
-                # Этот обработчик ловит все остальные нажатия кнопок с точками
-                CallbackQueryHandler(show_description) 
+                CallbackQueryHandler(show_description, pattern=r"^desc_\d+$")
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
