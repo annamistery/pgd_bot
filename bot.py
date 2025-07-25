@@ -95,6 +95,12 @@ async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return GET_DOB
 
 
+# Файл: telegram_bot.py
+# Замените только эту функцию
+
+# Файл: telegram_bot.py
+# Замените старую функцию get_gender на эту:
+
 async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -103,24 +109,53 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.edit_message_text(text=rf"Вы выбрали пол: *{escape_markdown(gender_full)}*\.\n\n⏳ Начинаю расчет\.\.\.", parse_mode=ParseMode.MARKDOWN_V2)
 
     user_data = context.user_data
+    name = user_data['name']
+    date_str = user_data['dob'].strftime('%d.%m.%Y')
+
     try:
-        person_mod = PGD_Person_Mod(user_data['name'], user_data['dob'].strftime('%d.%m.%Y'), gender_char)
+        # Шаг 1: Выполняем расчеты
+        person_mod = PGD_Person_Mod(name, date_str, gender_char)
         main_cup_data = person_mod.calculate_points()
         tasks_data = person_mod.tasks()
         periods_data = person_mod.periods_person()
 
-        processor = PersonalityProcessor(main_cup_data)
+        # Шаг 2: Оборачиваем и передаем в процессор
+        wrapped_cup_data = {'Основная чашка': main_cup_data}
+        processor = PersonalityProcessor(wrapped_cup_data)
         full_descriptions = processor.get_full_description()
         
+        # Шаг 3: Сохраняем данные в сессию
         context.user_data['full_descriptions'] = full_descriptions
         context.user_data['tasks_data'] = tasks_data
         context.user_data['periods_data'] = periods_data
-
+        
+        # --- ВОТ ВОССТАНОВЛЕННЫЙ БЛОК ---
+        header = f"*Результаты анализа для {escape_markdown(name)} \\({escape_markdown(date_str)}\\)*\n\n"
+        
+        # 1. Определяем переменную summary_text
+        summary_text = ""
+        
+        # 2. Наполняем ее данными
+        if tasks_data:
+            summary_text += "*Задачи по Матрице:*\n"
+            for key, val in tasks_data.items():
+                summary_text += f"_{escape_markdown(key)}_ `{escape_markdown(val) if val is not None else '-'}`\n"
+        if periods_data and "Бизнес периоды" in periods_data:
+            summary_text += "\n*Бизнес Периоды:*\n"
+            for key, val in periods_data["Бизнес периоды"].items():
+                summary_text += f"_{escape_markdown(key)}_: `{escape_markdown(val) if val is not None else '-'}`\n"
+        # --- КОНЕЦ ВОССТАНОВЛЕННОГО БЛОКА ---
+        
+        # 3. Теперь эта проверка корректна
+        if summary_text:
+            await context.bot.send_message(chat_id=query.message.chat_id, text=header + summary_text, parse_mode=ParseMode.MARKDOWN_V2)
+        
+        # Отправка кнопок с подробными описаниями
         if full_descriptions:
-            # ПРАВИЛЬНАЯ ЛОГИКА: callback_data содержит префикс 'key_' и сам ключ
+            description_keys = list(full_descriptions.keys())
             keyboard = [
                 [InlineKeyboardButton(text=key, callback_data=f"key_{key}")]
-                for key in full_descriptions.keys()
+                for key in description_keys
             ]
             keyboard.append([InlineKeyboardButton("📥 Скачать результат в .txt", callback_data="DOWNLOAD_FILE")])
             keyboard.append([InlineKeyboardButton("✅ Завершить", callback_data="END_CONVERSATION")])
@@ -134,11 +169,11 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         else:
             await context.bot.send_message(chat_id=query.message.chat_id, text="❌ Подробные описания не были сформированы.")
             return await end_conversation(update, context)
+
     except Exception as e:
         logger.error(f"Ошибка при расчете или отправке: {e}", exc_info=True)
         await context.bot.send_message(chat_id=query.message.chat_id, text=r"❌ Произошла внутренняя ошибка\. Попробуйте позже\.")
         return ConversationHandler.END
-
 
 async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
