@@ -101,7 +101,7 @@ async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # Файл: telegram_bot.py
 # Замените старую функцию get_gender на эту:
 
-async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+aasync def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     gender_char = query.data
