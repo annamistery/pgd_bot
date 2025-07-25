@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -38,14 +38,12 @@ GET_NAME, GET_DOB, GET_GENDER, SHOW_DESCRIPTION = range(4)
 
 
 def escape_markdown(text: str) -> str:
-    """Экранирует специальные символы для Telegram MarkdownV2."""
     if not isinstance(text, str):
         text = str(text)
     escape_chars = r'_*[]()~`>#+-.=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 def format_results_for_download(name: str, dob: datetime, results: dict, tasks: dict, periods: dict) -> str:
-    """Форматирует все результаты в красивую строку для .txt файла."""
     header = (
         f"Анализ личности\n{'='*20}\n"
         f"Имя: {name}\nДата рождения: {dob.strftime('%d.%m.%Y')}\n{'='*20}\n"
@@ -68,7 +66,6 @@ def format_results_for_download(name: str, dob: datetime, results: dict, tasks: 
     
     return header + tasks_content + periods_content + main_content
 
-# --- Функции диалога ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
@@ -79,6 +76,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     return GET_NAME
 
+
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['name'] = update.message.text
     logger.info(f"Имя пользователя: {context.user_data['name']}")
@@ -87,6 +85,7 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         parse_mode=ParseMode.MARKDOWN_V2
     )
     return GET_DOB
+
 
 async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
@@ -103,6 +102,7 @@ async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             parse_mode=ParseMode.MARKDOWN_V2
         )
         return GET_DOB
+
 
 async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -128,16 +128,17 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             raise ValueError(f"Ошибка при расчете основной матрицы: {main_cup_data}")
 
         processor = PersonalityProcessor(main_cup_data)
+        # ИЗМЕНЕНИЕ 1: full_descriptions теперь содержит ключи вида "Точка А = 21"
         full_descriptions = processor.get_full_description()
         
         context.user_data['full_descriptions'] = full_descriptions
         context.user_data['tasks_data'] = tasks_data
         context.user_data['periods_data'] = periods_data
         
+        # ИЗМЕНЕНИЕ 2: Сохраняем ключи как есть, чтобы использовать их для кнопок
         description_keys = list(full_descriptions.keys())
         context.user_data['description_keys'] = description_keys
 
-        # --- ИСПРАВЛЕНО: Этот блок теперь НАХОДИТСЯ ВНУТРИ TRY ---
         header = f"*Результаты анализа для {escape_markdown(name)} \\({escape_markdown(date_str)}\\)*\n\n"
         summary_text = ""
         if tasks_data:
@@ -151,10 +152,11 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         
         if summary_text:
             await context.bot.send_message(chat_id=query.message.chat_id, text=header + summary_text, parse_mode=ParseMode.MARKDOWN_V2)
-        # --- КОНЕЦ ИСПРАВЛЕННОГО БЛОКА ---
 
         if full_descriptions:
+            # ИЗМЕНЕНИЕ 3: Создаем кнопки, текст которых - это и есть наши составные ключи
             keyboard = [
+                # Текст кнопки будет, например, "Точка А = 21"
                 [InlineKeyboardButton(text=key, callback_data=f"desc_{i}")]
                 for i, key in enumerate(description_keys)
             ]
@@ -177,13 +179,12 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await context.bot.send_message(chat_id=query.message.chat_id, text=r"❌ Произошла внутренняя ошибка\. Попробуйте позже\.")
         return ConversationHandler.END
 
-# Вставьте этот код в telegram_bot.py, заменив старую функцию show_description
 
+# ИЗМЕНЕНИЕ 4: Логика этой функции адаптирована под новые ключи
 async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
 
-    # Максимальная длина сообщения в Telegram
     MAX_MESSAGE_LENGTH = 4096
 
     try:
@@ -199,21 +200,20 @@ async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_text(text="❌ Описание не найдено. Возможно, сессия устарела.")
         return SHOW_DESCRIPTION
 
+    # Теперь selected_key - это и есть наш ключ для поиска, например "Точка А = 21"
     selected_key = description_keys[key_index]
-    # Используем .get() для большей безопасности
     description_text = full_descriptions.get(selected_key, "Описание для этой точки не было найдено.")
     
     formatted_value = description_text.replace('**', '*').replace('\n\n', '\n')
+    # Заголовок сообщения теперь - это сам ключ
     message_text = f"*{escape_markdown(selected_key)}*\n\n{escape_markdown(formatted_value)}"
     
     keyboard = [[InlineKeyboardButton("⬅️ Назад к списку", callback_data="BACK_TO_LIST")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
-        # Проверяем, не превышает ли итоговый текст лимит Telegram
         if len(message_text) > MAX_MESSAGE_LENGTH:
-            # Если да, обрезаем его, оставляя место для предупреждения
-            cutoff_point = MAX_MESSAGE_LENGTH - 200  # Запас для текста и Markdown-разметки
+            cutoff_point = MAX_MESSAGE_LENGTH - 200
             message_text = message_text[:cutoff_point] + (
                 r"\n\n\.\.\."
                 r"\n\n*\[Внимание: Текст был сокращен из\-за ограничений Telegram\. "
@@ -226,26 +226,26 @@ async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             parse_mode=ParseMode.MARKDOWN_V2
         )
     except Exception as e:
-        # Логируем ошибку, если что-то пошло не так при отправке
         logger.error(f"Не удалось отправить описание для ключа '{selected_key}': {e}", exc_info=True)
-        # Сообщаем пользователю о проблеме
         await query.edit_message_text(
             text=r"❌ Произошла ошибка при отображении этого пункта\. "
-                r"Возможно, описание слишком длинное\. Пожалуйста, скачайте полный отчет в виде файла\.",
+                 r"Возможно, описание слишком длинное\. Пожалуйста, скачайте полный отчет в виде файла\.",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
     
     return SHOW_DESCRIPTION
 
+
+# ИЗМЕНЕНИЕ 5: Логика этой функции адаптирована
 async def back_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     
-    full_descriptions = context.user_data.get('full_descriptions', {})
+    description_keys = context.user_data.get('description_keys', [])
     
-    if full_descriptions:
-        description_keys = context.user_data.get('description_keys', [])
+    if description_keys:
+        # Кнопки создаются так же, как в get_gender
         keyboard = [
             [InlineKeyboardButton(text=key, callback_data=f"desc_{i}")]
             for i, key in enumerate(description_keys)
@@ -262,6 +262,7 @@ async def back_to_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await query.edit_message_text("Список описаний пуст.")
 
     return SHOW_DESCRIPTION
+
 
 async def send_results_as_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -295,6 +296,7 @@ async def send_results_as_file(update: Update, context: ContextTypes.DEFAULT_TYP
     
     return SHOW_DESCRIPTION
 
+
 async def end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query:
@@ -306,6 +308,7 @@ async def end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data.clear()
     return ConversationHandler.END
 
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info(f"Пользователь {update.effective_user.first_name} отменил диалог.")
     await update.message.reply_text(
@@ -314,6 +317,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     context.user_data.clear()
     return ConversationHandler.END
+
 
 def main() -> None:
     application = Application.builder().token(BOT_TOKEN).build()
@@ -338,6 +342,7 @@ def main() -> None:
     
     print("Бот запущен...")
     application.run_polling()
+
 
 if __name__ == "__main__": 
     main()
