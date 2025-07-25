@@ -266,12 +266,21 @@ async def end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     if query:
         await query.answer()
-        # Добавляем 'r'
         await query.edit_message_text(text=r"✅ Анализ завершен\. Чтобы начать новый, отправьте команду /start\.", parse_mode=ParseMode.MARKDOWN_V2)
     else:
-        # Добавляем 'r'
         await update.message.reply_text(r"✅ Анализ завершен\. Чтобы начать новый, отправьте команду /start\.", parse_mode=ParseMode.MARKDOWN_V2)
 
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# ---> ВОТ СЮДА ВСТАВЬТЕ НОВУЮ ФУНКЦИЮ <---
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Отменяет и завершает диалог."""
+    logger.info(f"Пользователь {update.effective_user.first_name} отменил диалог.")
+    await update.message.reply_text(
+        r"Действие отменено\. Чтобы начать новый анализ, введите /start\.", 
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
     context.user_data.clear()
     return ConversationHandler.END
 
