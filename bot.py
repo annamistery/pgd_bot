@@ -177,9 +177,14 @@ async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await context.bot.send_message(chat_id=query.message.chat_id, text=r"❌ Произошла внутренняя ошибка\. Попробуйте позже\.")
         return ConversationHandler.END
 
+# Вставьте этот код в telegram_bot.py, заменив старую функцию show_description
+
 async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+
+    # Максимальная длина сообщения в Telegram
+    MAX_MESSAGE_LENGTH = 4096
 
     try:
         key_index = int(query.data.split('_')[1])
@@ -195,7 +200,8 @@ async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return SHOW_DESCRIPTION
 
     selected_key = description_keys[key_index]
-    description_text = full_descriptions[selected_key]
+    # Используем .get() для большей безопасности
+    description_text = full_descriptions.get(selected_key, "Описание для этой точки не было найдено.")
     
     formatted_value = description_text.replace('**', '*').replace('\n\n', '\n')
     message_text = f"*{escape_markdown(selected_key)}*\n\n{escape_markdown(formatted_value)}"
@@ -203,7 +209,32 @@ async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     keyboard = [[InlineKeyboardButton("⬅️ Назад к списку", callback_data="BACK_TO_LIST")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+    try:
+        # Проверяем, не превышает ли итоговый текст лимит Telegram
+        if len(message_text) > MAX_MESSAGE_LENGTH:
+            # Если да, обрезаем его, оставляя место для предупреждения
+            cutoff_point = MAX_MESSAGE_LENGTH - 200  # Запас для текста и Markdown-разметки
+            message_text = message_text[:cutoff_point] + (
+                r"\n\n\.\.\."
+                r"\n\n*\[Внимание: Текст был сокращен из\-за ограничений Telegram\. "
+                r"Полная версия доступна в файле для скачивания\]*"
+            )
+
+        await query.edit_message_text(
+            text=message_text, 
+            reply_markup=reply_markup, 
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+    except Exception as e:
+        # Логируем ошибку, если что-то пошло не так при отправке
+        logger.error(f"Не удалось отправить описание для ключа '{selected_key}': {e}", exc_info=True)
+        # Сообщаем пользователю о проблеме
+        await query.edit_message_text(
+            text=r"❌ Произошла ошибка при отображении этого пункта\. "
+                r"Возможно, описание слишком длинное\. Пожалуйста, скачайте полный отчет в виде файла\.",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
     
     return SHOW_DESCRIPTION
 
