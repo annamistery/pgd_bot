@@ -1,7 +1,9 @@
+
 # Файл: main.py
 
 # Импортируем словари с данными
 from personality_processor import chashka, main_points
+import re
 
 class PersonalityProcessor:
     """
@@ -43,6 +45,31 @@ class PersonalityProcessor:
         
         self._final_result = full_descriptions
         return self._final_result
+    
+    # --- Новый метод для очистки текста ---
+    def _clean_text(self, text: str) -> str:
+        """
+        [Внутренний метод] Очищает строку от лишних пробелов,
+        переносов строк и повторяющихся пробелов,
+        делая её более читабельной.
+        """
+        if not isinstance(text, str):
+            return ""
+
+        # --- НОВАЯ ЛОГИКА ---
+        # Шаг 1: Заменяем все переносы строк на один пробел.
+        # Это также заменяет группы переносов, как \n\n, на один пробел.
+        text = text.replace('\n', ' ')
+
+        # Шаг 2: Удаляем заголовки Markdown (#, ##, ### и т.д.)
+        # Здесь `^` будет соответствовать началу всей строки.
+        text = re.sub(r'^#+\s*', '', text)
+        
+        # Шаг 3: Удаляем множественные пробелы между словами, оставляя только один.
+        text = re.sub(r' +', ' ', text)
+        
+        # Удаляем пробелы в начале и конце строки и возвращаем результат
+        return text.strip()
 
     def _dict_to_list(self) -> list:
         """[Внутренний метод] Преобразует cup_dict в список строк."""
@@ -65,10 +92,11 @@ class PersonalityProcessor:
                 continue
             
             # Ключ для поиска в словаре chashka формируется с "= 1"
-            description_key = f"{point_name} = {value_str}"
+            description_key = f"{point_name} = 1"
             description = self.chashka_descriptions.get(description_key, "Описание для этой точки не найдено.")
             
-            final_dict[item] = description
+            # Применяем очистку сразу после получения описания
+            final_dict[item] = self._clean_text(description)
             
         return final_dict
 
@@ -79,8 +107,11 @@ class PersonalityProcessor:
             point_name = key.split(' = ')[0]
             explanation = self.main_points_explanations.get(point_name, "")
             
-            if explanation and value != "Описание для этой точки не найдено.":
-                combined_description = f"### {explanation}\n\n{value}"
+            # Применяем очистку к пояснению перед объединением
+            cleaned_explanation = self._clean_text(explanation)
+            
+            if cleaned_explanation and value != "Описание для этой точки не найдено.":
+                combined_description = f"{cleaned_explanation} {value}"
             else:
                 combined_description = value
                 
@@ -97,7 +128,7 @@ if __name__ == "__main__":
             'Точка А': 21, 'Точка Б': 7, 'Точка В': 21, 'Точка Г': 5,
             'Точка Д': 6, 'Точка Л': 16, 'Точка Е': 6, 'Точка К': 16,
             'Точка Ж': 12, 'Точка З': 12, 'Точка И': 2, 'Точка Й': 10,
-            'Точка М': 1, 'Точка Н': 11, 'Точка О': None, 'Точка П': None
+            'Точка М': 1, 'Точка Н': None, 'Точка О': None, 'Точка П': None
         }
     }
 
@@ -106,7 +137,7 @@ if __name__ == "__main__":
 
     # 3. Вызываем единственный публичный метод для получения результата
     final_result = processor.get_full_description()
-    print(final_result)
+
     # 4. Выводим результат
-    #import json
-    #print(json.dumps(final_result, indent=4, ensure_ascii=False))
+    import json
+    print(json.dumps(final_result, indent=4, ensure_ascii=False))
