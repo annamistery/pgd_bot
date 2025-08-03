@@ -92,7 +92,7 @@ class PersonalityProcessor:
                 continue
             
             # Ключ для поиска в словаре chashka формируется с "= 1"
-            description_key = f"{point_name} = 1"
+            description_key = f"{point_name} = {value_str}"
             description = self.chashka_descriptions.get(description_key, "Описание для этой точки не найдено.")
             
             # Применяем очистку сразу после получения описания
